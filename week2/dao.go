@@ -8,7 +8,7 @@ import (
 	"github.com/pkg/errors"
 )
 
-// 检查error是否是无结果。
+// 检查error是否是无结果。包装一下让外界只依赖本项目的包，隐藏具体的error类型
 func isEmptyResult(err error) bool {
 	if err == nil {
 		return false
