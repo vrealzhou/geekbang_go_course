@@ -1,0 +1,50 @@
+/* Defines the message for todo service */
+syntax = "proto3";
+
+package vrealzhou.todo.v1;
+
+option go_package = "github.com/vrealzhou/geekbang_go_course/week4/pkg/todo";
+
+service TodoService {
+    rpc SetTodo (TodoItemRequest) returns (TodoItemResponse) {}
+
+    rpc ListTodoItems (ListTodoRequest) returns (TodoListResponse) {}
+}
+  
+
+// Status defines status of todo item
+enum Status {
+    PENDING = 0;
+    DONE = 10;
+}
+
+// TodoItemRequest is used for create/update a TODO item. It contains the field can be set via API
+message TodoItemRequest {
+    int32 id = 1;
+    string desc = 2;
+    Status status = 3;
+}
+
+// TodoItemResponse is used for present single TODO item. It contains all fields can be viewd. 
+message TodoItemResponse {
+    int32 id = 1;
+    string desc = 2;
+    Status status = 3;
+    int64 created = 4;
+    int64 timestamp = 5;
+}
+
+// Request object for list todos. It will only list the todo items of current week for simplicity.
+message ListTodoRequest {
+    int32 limit = 1;
+    int32 offset = 2;
+}
+
+// TodoListResponse is used for present multiple TODO items. It also contains pagination info.
+message TodoListResponse {
+    int32 total = 1;
+    int32 offset = 2;
+    int32 limit = 3;
+    repeated TodoItemResponse items = 4;
+}
+

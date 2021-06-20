@@ -1,0 +1,17 @@
+version: '3.7'
+services:
+  pgsql:
+    container_name: pgsql
+    image: postgres:alpine
+    ports:
+    - "5432:5432"
+    restart: always
+    environment:
+      POSTGRES_PASSWORD: todo
+      POSTGRES_DB: todo
+    networks:
+      - test
+
+networks:
+  test:
+    name: week4_test
