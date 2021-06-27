@@ -7,7 +7,7 @@
 		* 优点：简单可靠，性能高
 		* 缺点：机器数量变化需要手动调整阈值；无法应对流量不均匀
 		* 实现：[令牌桶算法](token-bucket.md)； [漏桶算法](leaky_bucket.md)
-	* 动态限流：[过载保护](overload_protection.md)。根据CPU, 内存等可动态调整|
+	* 动态限流：[过载保护](overload_protection.md)。根据CPU, 内存等可动态调整
 		* 优点：不需要手动设置
 		* 缺点：需要主动搜集指标；应用场景少
 		* 实现：BBR<br>连接池
