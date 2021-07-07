@@ -19,7 +19,7 @@ type BucketedCounter struct {
 	startTime   *int64                                 // int64(len(bucket))结果，暂存下来减少计算时间
 }
 
-func NewBucketedCounter(numBuckets, bucketSize time.Duration) *BucketedCounter {
+func NewBucketedCounter(numBuckets int64, bucketSize time.Duration) *BucketedCounter {
 	totalBuckets := numBuckets * 2 // 存储双倍buckets防止覆盖
 	buckets := make([]*Bucket, totalBuckets)
 	for i := 0; i < len(buckets); i++ {
@@ -66,7 +66,7 @@ func (c *BucketedCounter) GetValue(ctx context.Context, evtType event.Event, win
 	now := time.Now()
 	c.StartIfNotStarted(now)
 	// 计算时间窗口是否过大
-	if window.Nanoseconds() > c.bucketSize.Milliseconds()*int64(len(c.buckets)/2) {
+	if window.Milliseconds() > c.bucketSize.Milliseconds()*int64(len(c.buckets)/2) {
 		return 0, fmt.Errorf("window %d ms is longer than max allowed window", window.Milliseconds())
 	}
 	windowBegin := now.Add(0 - window)
