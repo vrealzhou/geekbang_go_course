@@ -13,39 +13,39 @@ import (
 
 // 计数器
 type BucketedCounter struct {
-	buckets        []*Bucket             // 若干个单元的计数器
-	bucketIndex    func(t time.Time) int // 用来计算指定时间点落于哪个bucket
-	bucketSizeInNs int64                 // 每个单元的时长
-	totalBuckets   int64                 // int64(len(bucket))结果，暂存下来减少计算时间
+	buckets     []*Bucket                              // 若干个单元的计数器
+	bucketIndex func(startTime int64, t time.Time) int // 用来计算指定时间点落于哪个bucket
+	bucketSize  time.Duration                          // 每个单元的时长
+	startTime   *int64                                 // int64(len(bucket))结果，暂存下来减少计算时间
 }
 
-func NewBucketedCounter(numBuckets, bucketSizeInMs int64) *BucketedCounter {
-	bucketSizeInNs := bucketSizeInMs * 1000000 // 以纳秒为计算单位
-	totalBuckets := numBuckets * 2             // 存储双倍buckets防止覆盖
+func NewBucketedCounter(numBuckets, bucketSize time.Duration) *BucketedCounter {
+	totalBuckets := numBuckets * 2 // 存储双倍buckets防止覆盖
 	buckets := make([]*Bucket, totalBuckets)
 	for i := 0; i < len(buckets); i++ {
-		// 每个bucketSize作为时间差范围
-		buckets[i] = NewBucket(time.Duration(bucketSizeInMs) * time.Millisecond)
+		buckets[i] = NewBucket(bucketSize)
 	}
+	var start int64 = 0
 	return &BucketedCounter{
-		buckets:        buckets,
-		bucketSizeInNs: bucketSizeInNs,
-		totalBuckets:   totalBuckets,
+		buckets:    buckets,
+		bucketSize: bucketSize,
+		bucketIndex: func(startTime int64, t time.Time) int {
+			// 给定时间到起始时间的时间差 / 每段时间差 得出总共多少段
+			// 模上总bucket数，得出给定时间在哪个bucket中
+			// index在bucket数组中不断循环
+			return int((t.UnixNano()-startTime)/bucketSize.Nanoseconds()) % len(buckets)
+		},
+		startTime: &start,
 	}
 }
 
 // 启动计数器
 func (c *BucketedCounter) StartIfNotStarted(startTime time.Time) {
-	if c.bucketIndex != nil {
+	start := atomic.LoadInt64(c.startTime)
+	if start != 0 {
 		return
 	}
-	startTimeUnixNano := startTime.UnixNano() // 计数器起始时间，用来计算bucket index
-	c.bucketIndex = func(t time.Time) int {
-		// 给定时间到起始时间的时间差 / 每段时间差 得出总共多少段
-		// 模上总bucket数，得出给定时间在哪个bucket中
-		// index在bucket数组中不断循环
-		return int(((t.UnixNano() - startTimeUnixNano) / c.bucketSizeInNs) % c.totalBuckets)
-	}
+	atomic.CompareAndSwapInt64(c.startTime, 0, startTime.UnixNano())
 }
 
 // 接收一个事件，实现了EventReceiver接口。
@@ -55,7 +55,7 @@ func (c *BucketedCounter) StartIfNotStarted(startTime time.Time) {
 func (c *BucketedCounter) ReceiveEvent(ctx context.Context, event event.Event, value int64) {
 	now := time.Now()
 	c.StartIfNotStarted(now)
-	c.buckets[c.bucketIndex(time.Now())].Record(event, now, value)
+	c.buckets[c.bucketIndex(atomic.LoadInt64(c.startTime), time.Now())].Record(event, now, value)
 }
 
 // 取得当前时间往前推指定窗口时段(window)的特定事件统计值
@@ -66,17 +66,22 @@ func (c *BucketedCounter) GetValue(ctx context.Context, evtType event.Event, win
 	now := time.Now()
 	c.StartIfNotStarted(now)
 	// 计算时间窗口是否过大
-	if window.Nanoseconds() > c.bucketSizeInNs*int64(len(c.buckets)/2) {
+	if window.Nanoseconds() > c.bucketSize.Milliseconds()*int64(len(c.buckets)/2) {
 		return 0, fmt.Errorf("window %d ms is longer than max allowed window", window.Milliseconds())
 	}
-	begin := c.bucketIndex(now.Add(0 - window))
-	end := c.bucketIndex(now)
+	windowBegin := now.Add(0 - window)
+	startTime := atomic.LoadInt64(c.startTime)
+	begin := c.bucketIndex(startTime, windowBegin)
+	if begin < 0 {
+		begin = 0
+	}
+	end := c.bucketIndex(startTime, now)
 	if end < begin {
 		end += len(c.buckets)
 	}
 	var result int64 = 0
 	for i := begin; i < end; i++ {
-		result += c.buckets[i%len(c.buckets)].Get(evtType)
+		result += c.buckets[i%len(c.buckets)].Get(windowBegin, evtType)
 	}
 	return result, nil
 }
@@ -127,7 +132,11 @@ func (b *Bucket) Record(evt event.Event, eventTime time.Time, value int64) {
 }
 
 // 取得给定事件的计数值
-func (b *Bucket) Get(evt event.Event) int64 {
+func (b *Bucket) Get(start time.Time, evt event.Event) int64 {
+	ts := atomic.LoadInt64(b.resetTimestamp)
+	if start.UnixNano()-ts >= b.gap.Nanoseconds() {
+		return 0
+	}
 	return atomic.LoadInt64(b.count[evt])
 }
 
@@ -142,12 +151,12 @@ func (b *Bucket) checkAndReset(now int64) {
 			atomic.StoreInt64(b.resetTimestamp, time.Now().UnixNano()) // 设置最新重置时间
 			atomic.StoreInt32(b.resetDone, 1)                          // 恢复重置标志
 		} else {
-			for {
+			for i := 0; i < 50; i++ {
 				ts := atomic.LoadInt64(b.resetTimestamp)
 				if ts >= now {
 					break
 				}
-				time.Sleep(100 * time.Microsecond) // 没抢到的睡100微秒 等重置完成
+				time.Sleep(b.gap / 100) // 没抢到的睡100微秒 等重置完成
 			}
 		}
 	}
